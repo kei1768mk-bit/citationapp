@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DOI → 引用作成</title>
+  <style>
+    :root { color-scheme: light; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+      background: #fafafa;
+      color: #111;
+    }
+    .wrap { max-width: 920px; margin: 0 auto; padding: 24px; }
+    .card {
+      background: white;
+      border: 1px solid #e5e5e5;
+      border-radius: 16px;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+      padding: 20px;
+    }
+    h1 { font-size: 20px; margin: 0 0 8px; }
+    p { margin: 0; color: #555; font-size: 13px; line-height: 1.5; }
+    label { display: block; margin-top: 16px; font-size: 13px; font-weight: 600; }
+    .row { display: flex; gap: 10px; margin-top: 8px; flex-wrap: wrap; }
+    input {
+      flex: 1;
+      min-width: 280px;
+      padding: 12px 14px;
+      border-radius: 12px;
+      border: 1px solid #ddd;
+      font-size: 14px;
+      outline: none;
+      background: #fff;
+    }
+    input:focus { border-color: #bbb; }
+    button {
+      padding: 12px 14px;
+      border-radius: 12px;
+      border: 1px solid #ddd;
+      background: #111;
+      color: #fff;
+      font-weight: 600;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    button.secondary { background: #fff; color: #111; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+
+    .error {
+      margin-top: 12px;
+      background: #fff5f5;
+      border: 1px solid #ffd6d6;
+      color: #b42318;
+      border-radius: 12px;
+      padding: 10px 12px;
+      font-size: 13px;
+      display: none;
+    }
+
+    .out {
+      margin-top: 16px;
+      background: #f7f7f7;
+      border: 1px solid #e5e5e5;
+      border-radius: 16px;
+      padding: 14px;
+      display: none;
+    }
+
+    .out .label { font-size: 12px; color: #666; }
+    .outbox {
+      margin-top: 8px;
+      background: #fff;
+      border: 1px solid #e5e5e5;
+      border-radius: 12px;
+      padding: 12px;
+      font-size: 15px;
+      line-height: 1.6;
+      word-break: break-word;
+    }
+
+    .meta {
+      margin-top: 12px;
+      font-size: 12px;
+      color: #666;
+    }
+    .meta ul { margin: 8px 0 0; padding-left: 18px; }
+
+    .hint {
+      margin-top: 14px;
+      font-size: 12px;
+      color: #777;
+    }
+    code { background: #f1f1f1; padding: 2px 6px; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>DOI → 引用作成（ブラウザだけで動作）</h1>
+      <p>
+        DOI（例：<code>https://doi.org/10.1126/science.1164271</code>）を貼って <b>引用作成</b>。
+        出力は <em>雑誌略称</em> がイタリック、<strong>巻</strong> がボールド。
+      </p>
+
+      <label for="doiInput">DOI（doi.org のURL形式でもOK）</label>
+      <div class="row">
+        <input id="doiInput" placeholder="https://doi.org/10.1126/science.1164271" autocomplete="off" />
+        <button id="buildBtn">引用作成</button>
+        <button id="copyRichBtn" class="secondary" disabled>書式つきでコピー</button>
+        <button id="copyTextBtn" class="secondary" disabled>プレーンをコピー</button>
+      </div>
+
+      <div id="error" class="error"></div>
+
+      <div id="out" class="out">
+        <div class="label">出力（書式つき）</div>
+        <div id="outRich" class="outbox" aria-live="polite"></div>
+
+        <div class="meta">
+          <div><b>取得値（Crossref）</b></div>
+          <ul>
+            <li>Author: <span id="mAuthor"></span></li>
+            <li>Journal: <span id="mJournal"></span></li>
+            <li>Volume: <span id="mVolume"></span></li>
+            <li>Year: <span id="mYear"></span></li>
+            <li>Pages: <span id="mPages"></span></li>
+          </ul>
+        </div>
+
+        <div class="hint">
+          ※ Crossref に雑誌略称（short-container-title）が無い場合は、雑誌フル名を使います。
+          <br />※ 書式つきコピーは、環境によっては <b>https / localhost</b> でClipboard APIが有効です。ファイル直開きでも動くようにフォールバックも入れています。
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+
+  function normalizeDoi(input) {
+    if (!input) return "";
+    let s = input.trim();
+    s = s.replace(/^https?:\/\/(dx\.)?doi\.org\//i, "");
+    s = s.replace(/^doi:\s*/i, "");
+    return s.trim();
+  }
+
+  function initialsFromGiven(given) {
+    if (!given) return "";
+    const parts = given
+      .replace(/\./g, " ")
+      .split(/[\s\-]+/)
+      .map((p) => p.trim())
+      .filter(Boolean);
+
+    return parts
+      .map((p) => {
+        const m = p.match(/[A-Za-zÀ-ÖØ-öø-ÿ]/);
+        return m ? m[0].toUpperCase() + "." : "";
+      })
+      .filter(Boolean)
+      .join(" ");
+  }
+
+  function enDashPages(pages) {
+    if (!pages) return "";
+    // Normalize hyphen to en-dash for page ranges
+    return pages.replace(/-/g, "–");
+  }
+
+  function escapeHtml(s) {
+    return (s || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/\"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function showError(msg) {
+    const el = $("error");
+    el.textContent = msg;
+    el.style.display = msg ? "block" : "none";
+  }
+
+  function clearOutput() {
+    $("out").style.display = "none";
+    $("outRich").textContent = "";
+    $("copyTextBtn").disabled = true;
+    $("copyRichBtn").disabled = true;
+  }
+
+  function setMeta({ author, journal, volume, year, pages }) {
+    $("mAuthor").textContent = author || "(未取得)";
+    $("mJournal").textContent = journal || "(未取得)";
+    $("mVolume").textContent = volume || "(未取得)";
+    $("mYear").textContent = year || "(未取得)";
+    $("mPages").textContent = pages || "(未取得)";
+  }
+
+  function renderRich({ authorBase, journal, volume, year, pages, hasEtAl }) {
+    const box = $("outRich");
+    box.innerHTML = "";
+
+    const wrap = document.createElement("span");
+    wrap.appendChild(document.createTextNode("("));
+
+    if (authorBase) wrap.appendChild(document.createTextNode(authorBase));
+    if (hasEtAl) wrap.appendChild(document.createTextNode(", et al."));
+
+    wrap.appendChild(document.createTextNode(", "));
+
+    const em = document.createElement("em");
+    em.textContent = journal || "";
+    wrap.appendChild(em);
+
+    wrap.appendChild(document.createTextNode(", "));
+
+    const strong = document.createElement("strong");
+    strong.textContent = volume || "";
+    wrap.appendChild(strong);
+
+    wrap.appendChild(document.createTextNode(" (" + (year || "") + ") "));
+
+    if (pages) wrap.appendChild(document.createTextNode(pages));
+
+    wrap.appendChild(document.createTextNode(")"));
+
+    box.appendChild(wrap);
+  }
+
+  async function copyPlain(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+    }
+  }
+
+  async function copyRich(html, plain) {
+    // Clipboard API (better), needs secure context.
+    try {
+      if (navigator.clipboard && window.ClipboardItem) {
+        const item = new ClipboardItem({
+          "text/html": new Blob([html], { type: "text/html" }),
+          "text/plain": new Blob([plain], { type: "text/plain" }),
+        });
+        await navigator.clipboard.write([item]);
+        return;
+      }
+    } catch {
+      // fall through
+    }
+
+    // Fallback: execCommand copy via hidden contenteditable.
+    const holder = document.createElement("div");
+    holder.contentEditable = "true";
+    holder.style.position = "fixed";
+    holder.style.left = "-9999px";
+    holder.style.top = "0";
+    holder.innerHTML = html;
+    document.body.appendChild(holder);
+
+    const range = document.createRange();
+    range.selectNodeContents(holder);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+
+    document.execCommand("copy");
+
+    sel.removeAllRanges();
+    document.body.removeChild(holder);
+  }
+
+  async function onBuild() {
+    showError("");
+    clearOutput();
+
+    const raw = $("doiInput").value;
+    const doi = normalizeDoi(raw);
+
+    if (!doi) {
+      showError("DOIを入力してください（doi.orgのURLでもOKです）");
+      return;
+    }
+
+    const btn = $("buildBtn");
+    btn.disabled = true;
+    btn.textContent = "取得中…";
+
+    try {
+      const url = "https://api.crossref.org/works/" + encodeURIComponent(doi);
+      const res = await fetch(url, { headers: { Accept: "application/json" } });
+      if (!res.ok) throw new Error("Crossref API error: " + res.status + " " + res.statusText);
+
+      const json = await res.json();
+      const msg = json && json.message;
+      if (!msg) throw new Error("Crossrefの応答にmessageが見つかりません");
+
+      const authors = Array.isArray(msg.author) ? msg.author : [];
+      const hasEtAl = authors.length > 1;
+      const a0 = authors.length ? authors[0] : null;
+
+      const family = a0 && a0.family ? a0.family : "";
+      const given = a0 && a0.given ? a0.given : "";
+      const authorBase = [initialsFromGiven(given), family].filter(Boolean).join(" ");
+      const authorDisplay = hasEtAl ? (authorBase + ", et al.") : authorBase;
+
+      const containerTitle = Array.isArray(msg["container-title"]) ? msg["container-title"][0] : msg["container-title"];
+      const shortContainerTitle = Array.isArray(msg["short-container-title"]) ? msg["short-container-title"][0] : msg["short-container-title"];
+      const journal = String((shortContainerTitle || containerTitle || "")).trim();
+
+      const volume = String(msg.volume || "").trim();
+
+      const year =
+        (msg.issued && msg.issued["date-parts"] && msg.issued["date-parts"][0] && msg.issued["date-parts"][0][0]) ||
+        (msg.published && msg.published["date-parts"] && msg.published["date-parts"][0] && msg.published["date-parts"][0][0]) ||
+        (msg["published-print"] && msg["published-print"]["date-parts"] && msg["published-print"]["date-parts"][0] && msg["published-print"]["date-parts"][0][0]) ||
+        (msg["published-online"] && msg["published-online"]["date-parts"] && msg["published-online"]["date-parts"][0] && msg["published-online"]["date-parts"][0][0]) ||
+        "";
+
+      const pages = enDashPages(String(msg.page || "").trim());
+
+      const record = {
+        doi,
+        authorBase,
+        authorDisplay,
+        journal,
+        volume,
+        year: String(year || ""),
+        pages,
+        hasEtAl,
+      };
+
+      renderRich(record);
+      setMeta({
+        author: record.authorDisplay,
+        journal: record.journal,
+        volume: record.volume,
+        year: record.year,
+        pages: record.pages,
+      });
+
+      $("out").style.display = "block";
+
+      const plain = "(" + record.authorDisplay + ", " + record.journal + ", " + record.volume + " (" + record.year + ") " + record.pages + ")";
+      const richHtml = "<span>(" +
+        escapeHtml(record.authorBase) +
+        (record.hasEtAl ? ", et al." : "") +
+        ", <em>" + escapeHtml(record.journal) + "</em>, <strong>" + escapeHtml(record.volume) + "</strong> (" + escapeHtml(record.year) + ") " + escapeHtml(record.pages) + ")</span>";
+
+      $("copyTextBtn").disabled = false;
+      $("copyTextBtn").onclick = () => copyPlain(plain);
+
+      $("copyRichBtn").disabled = false;
+      $("copyRichBtn").onclick = () => copyRich(richHtml, plain);
+
+    } catch (e) {
+      showError(e && e.message ? e.message : "不明なエラーが発生しました");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "引用作成";
+    }
+  }
+
+  $("buildBtn").addEventListener("click", onBuild);
+  $("doiInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") onBuild();
+  });
+</script>
+</body>
+</html>
